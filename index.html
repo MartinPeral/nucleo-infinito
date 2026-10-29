@@ -151,7 +151,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 (()=>{
 const $=s=>document.querySelector(s);
 const SAVE_KEY='nucleo_infinito_v1';
-const VERSION='1.5';
+const VERSION='2.0';
 const U=['K','M','B','T','Qa','Qi','Sx','Sp','Oc','No','Dc','Ud','Dd'];
 function fmt(n){
   if(!isFinite(n)) return '∞';
@@ -236,6 +236,40 @@ const CARDS=[
   {k:'gatillo',n:'Gatillo fácil',d:'+1 objetivo a la vez'},
 ];
 const C=k=>R&&R.cards?(R.cards[k]||0):0;
+
+/* ---------- Evoluciones ---------- */
+const EVO_WAVES=[8,22,36];
+const EVO1=[
+  {k:'laser',n:'Láser',d:'Rayo continuo que se carga cuanto más tiempo fija a un enemigo (hasta ×3). Los rebotes encadenan el rayo.'},
+  {k:'cannon',n:'Cañón',d:'Dispara más lento, pero cada proyectil explota en área con ×2,4 de daño.'},
+  {k:'drones',n:'Enjambre',d:'3 drones orbitan el núcleo y disparan por su cuenta. Cada nivel de Multidisparo añade un dron.'},
+];
+const EVO2={
+  laser:[{k:'refr',n:'Refractor',d:'El rayo se divide: +2 objetivos a la vez.'},{k:'aniq',n:'Aniquilador',d:'Carga máxima ×6 y se carga el doble de rápido.'}],
+  cannon:[{k:'racimo',n:'Racimo',d:'Cada explosión suelta 4 bombas pequeñas alrededor.'},{k:'mortero',n:'Mortero',d:'Explosiones más grandes que aturden a los enemigos.'}],
+  drones:[{k:'colmena',n:'Colmena',d:'+3 drones.'},{k:'cazador',n:'Cazadores',d:'Los drones hacen ×2 de daño y sus balas rebotan una vez más.'}],
+};
+const EVO3=[
+  {k:'sobre',n:'Sobrecarga',d:'Cada 20 s el núcleo entra en sobrecarga: 4 s con ×3 daño y ×2 cadencia.'},
+  {k:'singu',n:'Singularidad',d:'Cada 12 s abre un agujero negro que atrae y tritura a los enemigos.'},
+];
+const evoFind=(tier,k,cls)=>(tier===1?EVO1:tier===2?EVO2[cls]:EVO3).find(x=>x.k===k);
+function evoNames(){
+  if(!R||!R.evo) return [];
+  const e=R.evo, out=[];
+  if(e.cls) out.push(evoFind(1,e.cls).n);
+  if(e.spec) out.push(evoFind(2,e.spec,e.cls).n);
+  if(e.ult) out.push(evoFind(3,e.ult).n);
+  return out;
+}
+function pendingEvo(){
+  if(!R||R.over||!R.evo) return 0;
+  const e=R.evo;
+  if(R.wave>=EVO_WAVES[0]&&!e.cls) return 1;
+  if(R.wave>=EVO_WAVES[1]&&!e.spec) return 2;
+  if(R.wave>=EVO_WAVES[2]&&!e.ult) return 3;
+  return 0;
+}
 
 /* ---------- Fórmulas ---------- */
 const F={
@@ -346,19 +380,23 @@ let R=null, enemies=[], bullets=[], parts=[], rings=[], texts=[], booms=[];
 let paused=false;
 const L=k=>R?(R.lv[k]||0):0;
 const maxHp=()=>F.hp(L('hp'));
+const curDmg=()=>F.dmg(L('dmg'))*(R&&R.overT>0?3:1);
+const curRate=()=>F.rate(L('rate'))*(R&&R.overT>0?2:1);
 
-function freshState(){ return {shotT:0,pulseT:5,toSpawn:0,spawnT:0,spawnGap:1,gapT:0,shake:0,over:false,shieldT:0,waveTotal:1,healT:1}; }
+function freshState(){ return {shotT:0,pulseT:5,toSpawn:0,spawnT:0,spawnGap:1,gapT:0,shake:0,over:false,shieldT:0,waveTotal:1,healT:1,
+  beams:[],dcd:null,ultT:8,overT:0,hole:null}; }
 function clearField(){ enemies=[];bullets=[];parts=[];rings=[];texts=[];booms=[]; }
 function newRun(){
   const h=pp('head');
-  R=Object.assign(freshState(),{wave:0,hp:0,cash:startCash(pp('start')),lv:{dmg:h,hp:h,rate:h},kills:0,cards:{}});
+  R=Object.assign(freshState(),{wave:0,hp:0,cash:startCash(pp('start')),lv:{dmg:h,hp:h,rate:h},kills:0,cards:{},evo:{}});
   R.hp=maxHp();
   clearField();
   nextWave();
   save(); updateCardsTag();
 }
 function resumeRun(saved){
-  R=Object.assign(freshState(),{cards:{}},saved);
+  R=Object.assign(freshState(),{cards:{},evo:{}},saved);
+  R.evo=R.evo||{};
   clearField();
   R.wave--; nextWave(true);
   updateCardsTag();
@@ -424,14 +462,18 @@ function spawnEnemy(type,d,a){
 }
 const epos=e=>[Math.cos(e.a)*e.d, Math.sin(e.a)*e.d];
 
-function hurt(e,amt,crit,frost){
+function hurt(e,amt,crit,frost,quiet){
   if(e.dead) return;
+  const full=amt;
   if(e.sh>0){ const a=Math.min(e.sh,amt); e.sh-=a; amt-=a; }
-  e.hp-=amt; e.flash=0.09; if(e.t!=='boss') e.d+=1.2;
+  e.hp-=amt;
   if(frost>0){ e.slowT=1.5; e.slow=Math.max(e.slow,frost); }
-  const [x,y]=epos(e);
-  burst(x,y,crit?6:2,crit?'#fff3c4':'#ffd9a0',crit?90:50);
-  if(crit && texts.length<40) texts.push({x:x+(Math.random()-.5)*8,y:y-e.r,s:fmt(amt+ (e.sh>0?0:0)),l:0.7});
+  if(!quiet){
+    e.flash=0.09; if(e.t!=='boss') e.d+=1.2;
+    const [x,y]=epos(e);
+    burst(x,y,crit?6:2,crit?'#fff3c4':'#ffd9a0',crit?90:50);
+    if(crit && texts.length<40) texts.push({x:x+(Math.random()-.5)*8,y:y-e.r,s:fmt(full),l:0.7});
+  }
   if(e.hp<=0) kill(e);
 }
 function kill(e){
@@ -443,7 +485,7 @@ function kill(e){
   SFX.kill();
   const heal=MV('vamp')+0.005*C('vampiro');
   if(heal>0) R.hp=Math.min(maxHp(),R.hp+maxHp()*heal);
-  if(MV('explo')>0) booms.push({x,y,dmg:F.dmg(L('dmg'))*MV('explo')});
+  if(MV('explo')>0) booms.push({x,y,dmg:curDmg()*MV('explo'),r:34});
   if(e.t==='boss'){
     const c=Math.ceil(R.wave/5*(1+0.1*pp('cryst'))*(1+MV('gem')));
     S.crystals+=c;
@@ -461,19 +503,56 @@ function targets(n,range){
   list.sort((a,b)=>a.d-b.d);
   return list.slice(0,n);
 }
-function fire(e){
+function fire(e,x=0,y=0,mul=1,extraB=0,shell=false){
   const crit=Math.random()<F.crit(L('crit'));
-  const dmg=F.dmg(L('dmg'))*(crit?2.5:1);
-  bullets.push({x:0,y:0,tg:e,dmg,crit,b:L('bounce')+MV('reb'),hit:new Set(),life:2});
+  const dmg=curDmg()*mul*(crit?2.5:1);
+  bullets.push({x,y,tg:e,dmg,crit,b:(shell?0:L('bounce')+MV('reb'))+extraB,hit:new Set(),life:2,shell});
+}
+function laser(dt,range,n){
+  const ts=targets(n,range), old=R.beams, nb=[];
+  const aniq=R.evo.spec==='aniq', maxR=aniq?5:2, spd=aniq?1:0.5;
+  const dps=curDmg()*curRate()*0.9*(1+F.crit(L('crit'))*1.5);
+  const frost=MV('frio'), chains=L('bounce')+MV('reb');
+  for(const e of ts){
+    const prev=old.find(b=>b.tg===e);
+    const ramp=Math.min(maxR,(prev?prev.ramp:0)+spd*dt);
+    const beam={tg:e,ramp,chain:[]}; nb.push(beam);
+    hurt(e,dps*(1+ramp)*dt,false,frost,true);
+    let from=e; const hit=new Set([e]);
+    for(let i=0;i<chains;i++){
+      const [fx,fy]=epos(from); let nx=null,nd=90;
+      for(const o of enemies){ if(o.dead||hit.has(o)) continue; const [ox,oy]=epos(o); const d=Math.hypot(ox-fx,oy-fy); if(d<nd){nd=d;nx=o;} }
+      if(!nx) break;
+      hit.add(nx); beam.chain.push(nx); hurt(nx,dps*(1+ramp)*0.5*dt,false,frost,true); from=nx;
+    }
+  }
+  R.beams=nb;
+}
+const droneCount=nT=>3+(nT-1)+(R.evo.spec==='colmena'?3:0);
+function dronePos(i,k){ const a=tt*1.3+i*6.283/k; return [Math.cos(a)*48,Math.sin(a)*48]; }
+function dronesUpdate(dt,nT){
+  const k=droneCount(nT);
+  if(!R.dcd || R.dcd.length!==k) R.dcd=Array.from({length:k},(_,i)=>i/k*0.5);
+  const caz=R.evo.spec==='cazador', rate=curRate()*0.45;
+  for(let i=0;i<k;i++){
+    R.dcd[i]-=dt;
+    if(R.dcd[i]<=0){
+      const [x,y]=dronePos(i,k);
+      let best=null,bd=115;
+      for(const e of enemies){ if(e.dead) continue; const [ex,ey]=epos(e); const d=Math.hypot(ex-x,ey-y); if(d<bd){bd=d;best=e;} }
+      if(best){ fire(best,x,y,0.6*(caz?2:1),caz?1:0,false); R.dcd[i]=1/rate; } else R.dcd[i]=0.1;
+    }
+  }
 }
 function pulse(){
-  const lv=L('pulse'), rad=F.range(L('range'))*0.6, dmg=F.dmg(L('dmg'))*(2+lv);
+  const lv=L('pulse'), rad=F.range(L('range'))*0.6, dmg=curDmg()*(2+lv);
   rings.push({r:14,max:rad,t:0,c:'95,224,228'});
   for(const e of enemies){ if(!e.dead && e.d<rad+e.r){ hurt(e,dmg,false,0); if(e.t!=='boss') e.d+=22; } }
 }
 
 function update(dt){
   if(!R||R.over) return;
+  const pe=pendingEvo(); if(pe){ showEvo(pe); return; }
   // aparición
   if(R.toSpawn>0){
     R.spawnT-=dt;
@@ -488,11 +567,37 @@ function update(dt){
   if(R.shieldT>0) R.shieldT-=dt;
 
   const range=F.range(L('range'));
-  R.shotT-=dt;
-  if(R.shotT<=0){
-    const ts=targets(1+L('multi')+C('gatillo'),range);
-    if(ts.length){ ts.forEach(e=>fire(e)); R.shotT+=1/F.rate(L('rate')); if(R.shotT<0) R.shotT=0; }
-    else R.shotT=0;
+  const cls=R.evo.cls, nT=1+L('multi')+C('gatillo');
+  if(cls==='laser') laser(dt,range,nT+(R.evo.spec==='refr'?2:0));
+  else if(cls==='drones') dronesUpdate(dt,nT);
+  else {
+    const can=cls==='cannon';
+    R.shotT-=dt;
+    if(R.shotT<=0){
+      const ts=targets(nT,range);
+      if(ts.length){ ts.forEach(e=>fire(e,0,0,can?2.4:1,0,can)); R.shotT+=1/(curRate()*(can?0.45:1)); if(R.shotT<0) R.shotT=0; }
+      else R.shotT=0;
+    }
+  }
+  // habilidad definitiva
+  if(R.evo.ult==='sobre'){
+    if(R.overT>0) R.overT-=dt;
+    R.ultT-=dt; if(R.ultT<=0){ R.ultT=20; R.overT=4; SFX.card(); rings.push({r:14,max:60,t:0,c:'255,120,90'}); }
+  } else if(R.evo.ult==='singu'){
+    R.ultT-=dt;
+    if(R.ultT<=0){ const t=targets(1,range)[0]; if(t){ const [x,y]=epos(t); R.hole={x,y,t:2.5}; R.ultT=12; SFX.boss(); } else R.ultT=0.5; }
+  }
+  if(R.hole){
+    const H=R.hole; H.t-=dt; const hd=curDmg()*2*dt;
+    for(const e of enemies){
+      if(e.dead) continue;
+      let [ex,ey]=epos(e); const dx=H.x-ex, dy=H.y-ey, d=Math.hypot(dx,dy);
+      if(d<75){
+        if(e.t!=='boss' && d>3){ ex+=dx/d*70*dt; ey+=dy/d*70*dt; e.a=Math.atan2(ey,ex); e.d=Math.hypot(ex,ey); }
+        hurt(e,hd,false,0,true);
+      }
+    }
+    if(H.t<=0) R.hole=null;
   }
   if(L('pulse')>0){ R.pulseT-=dt; if(R.pulseT<=0){ R.pulseT=5; pulse(); } }
 
@@ -512,6 +617,12 @@ function update(dt){
     b.px=b.x; b.py=b.y;
     if(dist<=step+tg.r){
       b.x=tx;b.y=ty; b.life=0;
+      if(b.shell){
+        const mort=R.evo.spec==='mortero';
+        booms.push({x:tx,y:ty,dmg:b.dmg,r:mort?48:30,stun:mort,big:true});
+        if(R.evo.spec==='racimo') for(let i=0;i<4;i++){ const a=i*1.571+Math.random()*0.5; booms.push({x:tx+Math.cos(a)*24,y:ty+Math.sin(a)*24,dmg:b.dmg*0.4,r:18}); }
+        continue;
+      }
       hurt(tg,b.dmg,b.crit,frost); b.hit.add(tg);
       if(b.b>0){
         let nx=null,nd=110;
@@ -525,9 +636,13 @@ function update(dt){
   // explosiones en cola (Detonador)
   let guard=0;
   while(booms.length && guard++<60){
-    const bm=booms.shift();
-    rings.push({r:2,max:34,t:0,c:'255,138,92',x:bm.x,y:bm.y});
-    for(const e of enemies){ if(e.dead) continue; const [ex,ey]=epos(e); if(Math.hypot(ex-bm.x,ey-bm.y)<34+e.r) hurt(e,bm.dmg,false,0); }
+    const bm=booms.shift(), br=bm.r||34;
+    rings.push({r:2,max:br,t:0,c:bm.big?'255,190,110':'255,138,92',x:bm.x,y:bm.y});
+    if(bm.big) burst(bm.x,bm.y,8,'#ffcf7a',110);
+    for(const e of enemies){
+      if(e.dead) continue; const [ex,ey]=epos(e);
+      if(Math.hypot(ex-bm.x,ey-bm.y)<br+e.r){ hurt(e,bm.dmg,false,frost,!bm.big); if(bm.stun && !e.dead){ e.slowT=Math.max(e.slowT,0.5); e.slow=1; } }
+    }
   }
   booms.length=0;
 
@@ -584,6 +699,7 @@ const world={s:1,cx:0,cy:0,spawnR:260};
 function resize(){
   const r=cv.getBoundingClientRect(), dpr=Math.min(3,window.devicePixelRatio||1);
   cv.width=Math.max(1,r.width*dpr); cv.height=Math.max(1,r.height*dpr);
+  if(r.width<20||r.height<20) return;
   world.s=Math.min(r.width,r.height)/340*dpr;
   world.cx=cv.width/2; world.cy=cv.height/2;
   world.spawnR=Math.hypot(cv.width,cv.height)/2/world.s+24;
@@ -641,17 +757,63 @@ function draw(){
     ctx.globalAlpha=1;
   }
 
+  const cls=R&&R.evo?R.evo.cls:null;
+  // rayos láser
+  if(cls==='laser'){
+    for(const b of R.beams){
+      let x0=0,y0=0;
+      [b.tg,...b.chain].forEach((e,i)=>{
+        const [x,y]=epos(e), k=i?0.6:1;
+        ctx.strokeStyle='rgba(127,233,238,0.25)'; ctx.lineWidth=(4+b.ramp*2.2)*k; ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x,y); ctx.stroke();
+        ctx.strokeStyle='rgba(235,255,255,0.95)'; ctx.lineWidth=(1.2+b.ramp*0.6)*k; ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x,y); ctx.stroke();
+        x0=x; y0=y;
+      });
+    }
+  }
+  // agujero negro
+  if(R && R.hole){
+    const H=R.hole, a=Math.min(1,H.t*2);
+    const hg=ctx.createRadialGradient(H.x,H.y,2,H.x,H.y,75);
+    hg.addColorStop(0,`rgba(4,2,12,${0.95*a})`); hg.addColorStop(0.35,`rgba(60,20,110,${0.55*a})`); hg.addColorStop(1,'rgba(60,20,110,0)');
+    ctx.fillStyle=hg; ctx.beginPath(); ctx.arc(H.x,H.y,75,0,6.283); ctx.fill();
+    ctx.strokeStyle=`rgba(192,123,255,${0.8*a})`; ctx.lineWidth=2;
+    for(let i=0;i<3;i++){ ctx.beginPath(); ctx.arc(H.x,H.y,14+i*9,-tt*4+i*2,-tt*4+i*2+2.2); ctx.stroke(); }
+  }
+  // drones
+  if(cls==='drones'){
+    const k=R.dcd?R.dcd.length:3;
+    for(let i=0;i<k;i++){
+      const [x,y]=dronePos(i,k);
+      ctx.save(); ctx.translate(x,y); ctx.rotate(tt*3);
+      ctx.fillStyle=R.evo.spec==='cazador'?'#ffcf7a':'#9ff3f5';
+      ctx.beginPath(); ctx.moveTo(5,0); ctx.lineTo(0,3.5); ctx.lineTo(-5,0); ctx.lineTo(0,-3.5); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.strokeStyle='rgba(159,243,245,0.12)'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(0,0,48,0,6.283); ctx.stroke();
+  }
+
   const hpr=R?R.hp/maxHp():1;
-  const g=ctx.createRadialGradient(0,0,2,0,0,40);
-  g.addColorStop(0,'rgba(255,179,71,0.55)'); g.addColorStop(1,'rgba(255,179,71,0)');
-  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,40,0,6.283); ctx.fill();
+  const over=R&&R.overT>0;
+  const col=over?'#ff7a59':cls==='laser'?'#7fe9ee':cls==='cannon'?'#ff9f43':'#ffb347';
+  const glowRGB=over?'255,110,80':cls==='laser'?'127,233,238':'255,179,71';
+  const gr=over?58:40;
+  const g=ctx.createRadialGradient(0,0,2,0,0,gr);
+  g.addColorStop(0,`rgba(${glowRGB},0.55)`); g.addColorStop(1,`rgba(${glowRGB},0)`);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,gr,0,6.283); ctx.fill();
   if(R && escInterval() && R.shieldT<=0){ ctx.strokeStyle='rgba(95,224,228,0.75)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,0,24,0,6.283); ctx.stroke(); }
-  ctx.save(); ctx.rotate(tt*0.8);
-  ctx.strokeStyle='#ffb347'; ctx.lineWidth=2.4;
-  for(let i=0;i<3;i++){ctx.beginPath();ctx.arc(0,0,18,i*2.094,i*2.094+1.3);ctx.stroke();}
+  ctx.save(); ctx.rotate(tt*(over?2.4:0.8));
+  ctx.strokeStyle=col; ctx.lineWidth=cls==='cannon'?3.6:2.4;
+  const segs=cls==='cannon'?2:cls==='drones'?4:3;
+  for(let i=0;i<segs;i++){ const a=i*6.283/segs; ctx.beginPath(); ctx.arc(0,0,18,a,a+6.283/segs*0.62); ctx.stroke(); }
   ctx.restore();
-  ctx.fillStyle=hpr<0.3?'#ff7a59':'#ffd08a';
-  ctx.beginPath(); ctx.arc(0,0,10+Math.sin(tt*3)*0.8,0,6.283); ctx.fill();
+  ctx.fillStyle=hpr<0.3?'#ff7a59':(cls==='laser'?'#c9fbfd':'#ffd08a');
+  const pr=10+Math.sin(tt*3)*0.8;
+  ctx.save(); ctx.rotate(-tt*0.6);
+  ctx.beginPath();
+  if(cls==='laser'){ for(let i=0;i<3;i++){ const a=i*2.094-1.571; ctx.lineTo(Math.cos(a)*pr*1.25,Math.sin(a)*pr*1.25); } ctx.closePath(); }
+  else if(cls==='cannon'){ for(let i=0;i<6;i++){ const a=i*1.047; ctx.lineTo(Math.cos(a)*pr*1.15,Math.sin(a)*pr*1.15); } ctx.closePath(); }
+  else ctx.arc(0,0,pr,0,6.283);
+  ctx.fill(); ctx.restore();
   ctx.fillStyle='#fff7e6'; ctx.beginPath(); ctx.arc(0,0,4.5,0,6.283); ctx.fill();
 }
 let frostOn=false;
@@ -683,9 +845,19 @@ function renderList(){
     h+=`<div class="sec">Partidas ${S.runs} · enemigos ${fmt(S.kills||0)} · versión ${VERSION}</div>`;
   } else if(tab==='lab'){
     h+=renderLab();
-  } else RUN_UP[tab].forEach(d=>{ h+=btn(d,false); });
+  } else {
+    if(tab==='atk') h+=`<div class="sec">Forma: ${evoLine()}</div>`;
+    RUN_UP[tab].forEach(d=>{ h+=btn(d,false); });
+  }
   list.innerHTML=h;
   refreshList();
+}
+function evoLine(){
+  const n=evoNames();
+  if(!n.length) return 'núcleo básico · evoluciona en la oleada '+EVO_WAVES[0];
+  if(n.length===1) return n[0]+' · especialización en la oleada '+EVO_WAVES[1];
+  if(n.length===2) return n.join(' › ')+' · definitiva en la oleada '+EVO_WAVES[2];
+  return n.join(' › ');
 }
 function btn(d,perm){
   const locked=d.u && S.best<d.u;
@@ -868,6 +1040,21 @@ function showCards(){
     <div class="cards">${pool.map(c=>`<button class="cardbtn" data-c="${c.k}"><b>${c.n}${C(c.k)?' · ya tienes '+C(c.k):''}</b><span>${c.d}</span></button>`).join('')}</div>`,
     ()=>ov.querySelectorAll('.cardbtn').forEach(b=>b.onclick=()=>pickCard(b.dataset.c)));
 }
+function showEvo(tier){
+  const opts=tier===1?EVO1:tier===2?EVO2[R.evo.cls]:EVO3;
+  const title=tier===1?'Evolución':tier===2?'Especialización':'Definitiva';
+  const sub=tier===1?'Elige en qué se convierte tu núcleo durante esta partida.':tier===2?'Mejora tu '+evoFind(1,R.evo.cls).n.toLowerCase()+'.':'La última evolución de esta partida.';
+  SFX.drop();
+  showCard(`<h1>${title}</h1><p>${sub}</p>
+    <div class="cards">${opts.map(o=>`<button class="cardbtn" data-evo="${o.k}"><b>${o.n}</b><span>${o.d}</span></button>`).join('')}</div>`,
+    ()=>ov.querySelectorAll('[data-evo]').forEach(b=>b.onclick=()=>pickEvo(tier,b.dataset.evo)));
+}
+function pickEvo(tier,k){
+  if(tier===1){ R.evo.cls=k; R.dcd=null; R.beams=[]; }
+  else if(tier===2) R.evo.spec=k;
+  else { R.evo.ult=k; R.ultT=tier===3&&k==='sobre'?6:4; }
+  SFX.card(); hideOv(); updateCardsTag(); renderList(); save();
+}
 function pickCard(k){
   const oldMax=maxHp();
   R.cards[k]=(R.cards[k]||0)+1;
@@ -877,7 +1064,9 @@ function pickCard(k){
 }
 function updateCardsTag(){
   const parts=R?Object.entries(R.cards||{}).map(([k,n])=>CARDS.find(c=>c.k===k).n+(n>1?' ×'+n:'')):[];
-  $('#cardsTag').textContent=parts.length?'Cartas: '+parts.join(' · '):'';
+  const ev=evoNames();
+  const txt=[ev.length?ev.join(' › '):'', parts.length?'Cartas: '+parts.join(' · '):''].filter(Boolean).join('   |   ');
+  $('#cardsTag').textContent=txt;
 }
 
 let lastHud=0, lastLab=0;
@@ -927,7 +1116,7 @@ function nextToast(){
 /* ---------- Guardar ---------- */
 function save(){
   S.lastSeen=Date.now();
-  if(R && !R.over) S.run={wave:R.wave,hp:R.hp,cash:R.cash,lv:R.lv,kills:R.kills,cards:R.cards};
+  if(R && !R.over) S.run={wave:R.wave,hp:R.hp,cash:R.cash,lv:R.lv,kills:R.kills,cards:R.cards,evo:R.evo};
   try{localStorage.setItem(SAVE_KEY,JSON.stringify(S));}catch(e){}
 }
 setInterval(save,5000);
@@ -957,7 +1146,7 @@ if(S.run){
   newRun();
   showCard(`<h1>Núcleo <i>Infinito</i></h1>
     <p>Tu núcleo dispara solo. Aguanta todas las oleadas que puedas.</p>
-    <p>Gasta <b style="color:var(--core)">chatarra</b> en mejoras durante la partida. Al caer ganas <b style="color:var(--crys)">cristales</b> para el Taller y el Laboratorio. Cada 5 oleadas eliges una carta y los jefes sueltan módulos.</p>
+    <p>Gasta <b style="color:var(--core)">chatarra</b> en mejoras durante la partida. Al caer ganas <b style="color:var(--crys)">cristales</b> para el Taller y el Laboratorio. En las oleadas 8, 22 y 36 tu núcleo evoluciona: láser, cañón o enjambre de drones. Cada 5 oleadas eliges una carta y los jefes sueltan módulos.</p>
     <button class="big" id="go">Empezar</button>`,()=>$('#go').onclick=hideOv);
 }
 renderList(); hud(true); markLab();
