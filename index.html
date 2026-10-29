@@ -28,7 +28,7 @@ html{height:100%;width:100%;box-sizing:border-box;background:var(--bg);overflow:
 *,*::before,*::after{box-sizing:inherit}
 body{height:100%;width:100%;max-width:100vw;margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);overflow:hidden;
   -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
-.app{height:100%;width:100%;overflow:hidden;display:flex;flex-direction:column;gap:8px;
+.app{height:100%;width:100%;max-width:520px;margin-inline:auto;overflow:hidden;display:flex;flex-direction:column;gap:8px;
   padding-left:max(12px, env(safe-area-inset-left,0px));padding-right:max(12px, env(safe-area-inset-right,0px));padding-block:6px 4px}
 .hud{display:flex;align-items:center;gap:6px;font-family:var(--f-disp)}
 .wave{display:flex;flex-direction:column;line-height:1}
@@ -588,6 +588,7 @@ function resize(){
   world.spawnR=Math.hypot(cv.width,cv.height)/2/world.s+24;
 }
 window.addEventListener('resize',resize);
+try{ new ResizeObserver(()=>resize()).observe($('#stage')); }catch(e){}
 let tt=0;
 function draw(){
   const {s,cx,cy}=world;
