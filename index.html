@@ -151,6 +151,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 (()=>{
 const $=s=>document.querySelector(s);
 const SAVE_KEY='nucleo_infinito_v1';
+const VERSION='1.5';
 const U=['K','M','B','T','Qa','Qi','Sx','Sp','Oc','No','Dc','Ud','Dd'];
 function fmt(n){
   if(!isFinite(n)) return '∞';
@@ -679,7 +680,7 @@ function renderList(){
     PERM_UP.forEach(d=>{ h+=btn(d,true); });
     h+='<div class="sec">Hitos · récord oleada '+S.best+'</div>';
     MILES.forEach(m=>{ const got=S.best>=m.w; h+=`<div class="mile ${got?'got':''}"><span>${m.t}</span><b>${got?'✓':'Oleada '+m.w}</b></div>`; });
-    h+=`<div class="sec">Partidas ${S.runs} · enemigos ${fmt(S.kills||0)}</div>`;
+    h+=`<div class="sec">Partidas ${S.runs} · enemigos ${fmt(S.kills||0)} · versión ${VERSION}</div>`;
   } else if(tab==='lab'){
     h+=renderLab();
   } else RUN_UP[tab].forEach(d=>{ h+=btn(d,false); });
@@ -961,7 +962,16 @@ if(S.run){
 }
 renderList(); hud(true); markLab();
 requestAnimationFrame(frame);
-if('serviceWorker' in navigator){ try{ navigator.serviceWorker.register('sw.js').catch(()=>{}); }catch(e){} }
+if('serviceWorker' in navigator){
+  try{
+    const hadCtrl=!!navigator.serviceWorker.controller; let reloaded=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(hadCtrl && !reloaded){ reloaded=true; save(); location.reload(); } });
+    navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(reg=>{
+      reg.update().catch(()=>{});
+      document.addEventListener('visibilitychange',()=>{ if(!document.hidden) reg.update().catch(()=>{}); });
+    }).catch(()=>{});
+  }catch(e){}
+}
 })();
 </script>
 
